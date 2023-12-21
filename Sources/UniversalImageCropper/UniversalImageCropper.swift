@@ -3,21 +3,35 @@
 
 import UIKit
 import Photos
-import PhotosUI 
+import PhotosUI
 
-@available(iOS 14, *)
 public class ImagePicker {
-    public init() {}
     
-    private var onOpenImagePickerFinished: (UIImage) -> Void = { _ in }
+    private var pickContinuation: CheckedContinuation<[UIImage], Never>?
+    private var cropContinuation: CheckedContinuation<UIImage, Never>?
 
-    public func getImageCropperVc(for image: UIImage) -> UIViewController {
-        let cropVC = CropViewController()
-        cropVC.image = image
-        return cropVC
+    let picker = PHPickerViewController(configuration: .init())
+    var cropVC: CropViewController?
+    private var vc: UIViewController
+    
+    public init(origin vc: UIViewController) {
+        self.vc = vc
+        picker.delegate = self
+    }
+    public func openImageCropper(for image: UIImage) async -> UIImage? {
+        let cropVC = await CropViewController(image: image)
+
+        await Task { @MainActor in
+            cropVC.delegate = self
+        }
+        
+        await vc.present(cropVC, animated: true)
+        return await withCheckedContinuation { continuation in
+            self.cropContinuation = continuation
+        }
     }
     
-    public func getImagePickerVc(onOpenImagePickerFinished: @escaping (UIImage) -> Void) -> UIViewController {
+    public func openImagePicker() async -> [UIImage] {
         PHPhotoLibrary.requestAuthorization { status in
             switch status {
             case .authorized:
@@ -38,35 +52,46 @@ public class ImagePicker {
             }
         }
         
-        var configuration = PHPickerConfiguration()
-        configuration.selectionLimit = 4
-        configuration.filter = .images
-        let pickerViewController = PHPickerViewController(configuration: configuration)
-        pickerViewController.delegate = self
-        self.onOpenImagePickerFinished = onOpenImagePickerFinished
-        return pickerViewController
+        // Present the picker here. For example, using a UIViewController
+        // present(picker, animated: true)
+        await vc.present(picker, animated: true)
+        return await withCheckedContinuation { continuation in
+            self.pickContinuation = continuation
+        }
+    }
+    
+}
+
+extension ImagePicker: CropViewControllerDelegate {
+    func onFinish(image: UIImage?) {
+        vc.dismiss(animated: true, completion: nil)
+        self.cropContinuation?.resume(returning: image!)
+        self.cropContinuation = nil
     }
 }
 
-@available(iOS 14, *)
 extension ImagePicker: PHPickerViewControllerDelegate {
     public func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        picker.dismiss(animated: true)
-        if let itemprovider = results.first?.itemProvider{
-            
-            if itemprovider.canLoadObject(ofClass: UIImage.self){
-                itemprovider.loadObject(ofClass: UIImage.self) { image , error  in
-                    if let error{
-                        print(error)
-                    }
-                    if let selectedImage = image as? UIImage{
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onOpenImagePickerFinished(selectedImage)
-                        }
+        picker.dismiss(animated: true, completion: nil)
+        var imageResults: [UIImage] = []
+        let dispatchGroup = DispatchGroup()
+        
+        results.forEach { result in
+            if result.itemProvider.canLoadObject(ofClass: UIImage.self) {
+                dispatchGroup.enter()
+                result.itemProvider.loadObject(ofClass: UIImage.self) { image , error  in
+                    defer { dispatchGroup.leave() }
+                    if let selectedImage = image as? UIImage {
+                        imageResults.append(selectedImage)
                     }
                 }
             }
-            
+        }
+        
+        dispatchGroup.notify(queue: .main) {
+            self.pickContinuation?.resume(returning: imageResults)
+            self.pickContinuation = nil
         }
     }
 }
+

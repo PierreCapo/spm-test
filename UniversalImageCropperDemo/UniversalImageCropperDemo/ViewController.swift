@@ -11,7 +11,6 @@ import UniversalImageCropper
 class ViewController: UIViewController {
     var imagePicker: ImagePicker? = nil
     
-    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -28,13 +27,13 @@ class ViewController: UIViewController {
     
     @objc
     func buttonTapped(sender: UIButton) {
-        imagePicker = ImagePicker()
-        guard let vc = imagePicker?.getImagePickerVc(onOpenImagePickerFinished: { [weak self] image in
-            guard let cropVc = self?.imagePicker?.getImageCropperVc(for: image) else { return }
-            cropVc.modalPresentationStyle = .fullScreen
-            self?.navigationController?.present(cropVc, animated: true)
-        }) else { return }
-        navigationController?.present(vc, animated: true)
+        imagePicker = ImagePicker(origin: navigationController!)
+        Task {
+            let images = await imagePicker?.openImagePicker()
+            guard let image = images?.first else {return}
+            let imageResult = await imagePicker?.openImageCropper(for: image)
+            await imagePicker?.openImageCropper(for: imageResult!)
+        }
     }
     
 }
